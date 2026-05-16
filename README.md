@@ -1,6 +1,7 @@
 # ExHentai Gallery Downloader
 
 > ⚠️ **This program is AI-written.**
+>
 > This tool was created solely for the author's purpose of downloading ExHentai's original archive files for personal appreciation and local archival. **Please ensure you have enough GP (Gallery Points) before batch downloading** — the script only downloads the original archive and will not download archives of other resolutions. Thank you!
 
 ExHentai / e-hentai gallery archive automated downloader with CLI and GUI modes.
@@ -8,6 +9,7 @@ ExHentai / e-hentai gallery archive automated downloader with CLI and GUI modes.
 ## Known Issues
 
 - **Browser connection may take several minutes (up to ~10 minutes)** when connecting to Chrome via the remote debugging protocol. This is dependent on the Chrome profile size, system performance, and network conditions. Please be patient and do not close the program during this time.
+- **CJK (Chinese/Japanese/Korean) character display may have issues** — some characters may appear inconsistent in size or weight, which affects aesthetics. This is a limitation of the current GUI font handling.
 
 ## Features
 
