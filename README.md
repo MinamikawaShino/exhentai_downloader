@@ -1,3 +1,7 @@
+[简体中文](README.zh-cn.md) | [繁體中文](README.zh-tw.md) | [日本語](README.ja.md) | [Русский](README.ru.md)
+---
+
+
 # ExHentai Gallery Downloader
 
 > ⚠️ **This program is AI-written.**
@@ -154,7 +158,3 @@ Input gallery URL -> Navigate page -> Extract title -> Dedup check
 - Manual e-hentai login + CloudFlare bypass must be done once in the browser
 - Downloaded archives are ZIP format, saved as `GalleryTitle.zip`
 - When auto-extract is enabled, archives extract into `ExtractDir/GalleryTitle/`
-
----
-
-[简体中文](README.zh-cn.md) | [繁體中文](README.zh-tw.md) | [日本語](README.ja.md) | [Русский](README.ru.md)
