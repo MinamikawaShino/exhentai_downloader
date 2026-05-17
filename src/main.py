@@ -18,10 +18,7 @@ def main():
         cli_main()
     else:
         from .ui.app import App
-        if args.language:
-            from .i18n import set_language
-            set_language(args.language)
-        app = App()
+        app = App(language=args.language)
         app.run()
 
 

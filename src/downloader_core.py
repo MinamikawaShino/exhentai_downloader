@@ -3,6 +3,7 @@ import time
 import socket
 import threading
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum, auto
 
 import requests
@@ -14,7 +15,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 from .i18n import t
-from .db.library import scan_path_to_db, get_all_library_names, get_library_paths
+from .db.library import scan_path_to_db, get_all_library_names, get_library_paths, find_library_folder_count
 from .utils.filename import sanitize_filename, normalize_for_comparison
 from .utils.logging_utils import log_failure, save_queue
 
@@ -40,10 +41,12 @@ def _check_port_open(host, port, timeout=2):
 
 
 class ExHentaiDownloader:
-    def __init__(self, download_dir, library_paths, chrome_debug_port=9222):
+    def __init__(self, download_dir, library_paths, chrome_debug_port=9222, skip_page_threshold=5, download_threads=1):
         self.download_dir = download_dir
         self.library_paths = list(library_paths) if library_paths else []
         self.chrome_debug_port = chrome_debug_port
+        self.skip_page_threshold = skip_page_threshold
+        self.download_threads = max(1, int(download_threads))
 
         self.driver = None
         self._shutdown_flag = threading.Event()
@@ -105,8 +108,12 @@ class ExHentaiDownloader:
         t3 = time.time()
         self.driver.set_page_load_timeout(30)
         try:
-            self.driver.get("about:blank")
-            self._emit("log", message=f"[DEBUG] about:blank ({time.time() - t3:.1f}s)")
+            current = self.driver.current_url
+            if current and current.startswith("http"):
+                self.driver.get(current)
+            else:
+                self.driver.get("about:blank")
+            self._emit("log", message=f"[DEBUG] warm-up ({time.time() - t3:.1f}s)")
         except Exception:
             pass
 
@@ -147,71 +154,93 @@ class ExHentaiDownloader:
 
         completed = 0
         failed = 0
+        skipped = 0
 
         while self._task_queue:
             if self._shutdown_flag.is_set():
                 remaining = list(self._task_queue)
-                if self._current_url:
-                    remaining.insert(0, self._current_url)
                 save_queue(remaining)
                 self._emit("status", message=t("status.interrupted"))
-                total = len(self._task_queue) + completed + failed + (1 if self._current_url else 0)
-                self._emit("finished", total=total, completed=completed, failed=failed)
+                total = len(remaining) + completed + failed + skipped
+                self._emit("finished", total=total, completed=completed, failed=failed, skipped=skipped)
                 return
 
             url = self._task_queue.popleft()
             self._current_url = url
-            total = len(self._task_queue) + completed + failed + 1
+            total = len(self._task_queue) + completed + failed + skipped + 1
             self._emit("task_update", url=url, status=TaskStatus.PROCESSING.name,
-                       completed=completed, failed=failed, total=total)
+                       completed=completed, failed=failed, skipped=skipped, total=total)
 
             result = self._process_one(url)
 
-            total = len(self._task_queue) + completed + failed
+            if result == "cancelled":
+                remaining = [url] + list(self._task_queue)
+                save_queue(remaining)
+                self._current_url = None
+                self._emit("status", message=t("status.interrupted"))
+                total = len(remaining) + completed + failed + skipped
+                self._emit("finished", total=total, completed=completed, failed=failed, skipped=skipped)
+                return
+
             if result == "completed":
                 completed += 1
-                total += 1
+                total = len(self._task_queue) + completed + failed + skipped
                 self._emit("task_update", url=url, status=TaskStatus.COMPLETED.name,
-                           completed=completed, failed=failed, total=total)
+                           completed=completed, failed=failed, skipped=skipped, total=total)
             elif result == "skipped":
+                skipped += 1
+                total = len(self._task_queue) + completed + failed + skipped
                 self._emit("task_update", url=url, status=TaskStatus.SKIPPED.name,
-                           completed=completed, failed=failed, total=total)
+                           completed=completed, failed=failed, skipped=skipped, total=total)
             else:
                 failed += 1
-                total += 1
+                total = len(self._task_queue) + completed + failed + skipped
                 self._emit("task_update", url=url, status=TaskStatus.FAILED.name,
-                           completed=completed, failed=failed, total=total)
+                           completed=completed, failed=failed, skipped=skipped, total=total)
+
+            self._current_url = None
 
             if self._shutdown_flag.is_set():
                 remaining = list(self._task_queue)
-                if self._current_url:
-                    remaining.insert(0, self._current_url)
                 save_queue(remaining)
-                self._emit("finished", total=total, completed=completed, failed=failed)
+                self._emit("finished", total=total, completed=completed, failed=failed, skipped=skipped)
                 return
 
-        self._emit("finished", total=completed + failed, completed=completed, failed=failed)
+        self._emit("finished", total=completed + failed + skipped, completed=completed, failed=failed, skipped=skipped)
 
     def _process_one(self, url):
         self._emit("log", message=t("download.processing", url=url))
         main_window = None
+        
         try:
+            try:
+                handles = self.driver.window_handles
+                if not handles:
+                    raise Exception("No browser windows available.")
+                try:
+                    main_window = self.driver.current_window_handle
+                except Exception:
+                    self.driver.switch_to.window(handles[0])
+                    main_window = handles[0]
+            except Exception as e:
+                log_failure(url, f"Browser state error: {e}")
+                return "failed"
+
             for nav_attempt in range(3):
                 if self._shutdown_flag.is_set():
-                    return "failed"
+                    return "cancelled"
                 try:
                     self.driver.get(url)
                     break
                 except Exception:
                     if nav_attempt < 2:
+                        import time
                         time.sleep(2)
                     else:
                         raise
 
-            main_window = self.driver.current_window_handle
-
             if self._shutdown_flag.is_set():
-                return "failed"
+                return "cancelled"
 
             title = self._wait_for_title()
             if title is None:
@@ -223,12 +252,25 @@ class ExHentaiDownloader:
             if os.path.exists(safe_filename_zip):
                 self._emit("log", message=t("download.file_exists", title=safe_title))
                 return "skipped"
+
+            web_page_count = self._get_page_count()
             if normalize_for_comparison(safe_title) in self._local_library:
-                self._emit("log", message=t("download.in_library", title=safe_title))
-                return "skipped"
+                folder_path, local_count = find_library_folder_count(self.library_paths, safe_title)
+                if folder_path and local_count > 0 and web_page_count is not None:
+                    diff = web_page_count - local_count
+                    if diff <= self.skip_page_threshold:
+                        self._emit("log", message=t("download.in_library", title=safe_title))
+                        return "skipped"
+                    else:
+                        self._emit("log", message=t("download.skip_page_diff", title=safe_title,
+                                          web_pages=web_page_count, local_files=local_count, diff=diff,
+                                          threshold=self.skip_page_threshold))
+                else:
+                    self._emit("log", message=t("download.in_library", title=safe_title))
+                    return "skipped"
 
             if self._shutdown_flag.is_set():
-                return "failed"
+                return "cancelled"
 
             self._emit("log", message=t("download.gallery_title", title=safe_title))
 
@@ -237,25 +279,20 @@ class ExHentaiDownloader:
                 log_failure(url, t("download.no_archive"))
                 return "failed"
 
-            new_window_found = self._click_and_wait_for_window(archive_link, main_window)
-            if not new_window_found:
+            archive_window = self._click_and_wait_for_window(archive_link, main_window)
+            if not archive_window:
                 log_failure(url, t("download.no_window"))
                 return "failed"
 
-            for w in self.driver.window_handles:
-                if w != main_window:
-                    self.driver.switch_to.window(w)
-                    break
+            self.driver.switch_to.window(archive_window)
 
             download_url = self._get_download_url(main_window)
             if not download_url:
                 log_failure(url, t("download.link_fail"))
-                self._close_extra_tab(main_window)
                 return "failed"
 
             if self._shutdown_flag.is_set():
-                self._close_extra_tab(main_window)
-                return "failed"
+                return "cancelled"
 
             self._emit("log", message=t("download.getting_link"))
 
@@ -264,10 +301,10 @@ class ExHentaiDownloader:
             requests_cookies = {c['name']: c['value'] for c in selenium_cookies}
 
             success, error = self._download_file(
-                download_url, safe_filename_zip, requests_cookies, real_user_agent)
+                download_url, safe_filename_zip, requests_cookies, real_user_agent, self.download_threads)
 
-            self._close_extra_tab(main_window)
-
+            if error == _USER_CANCELLED:
+                return "cancelled"
             if not success and error != _USER_CANCELLED:
                 log_failure(url, t("download.failed_http", filename=safe_title, error=error))
                 return "failed"
@@ -278,8 +315,9 @@ class ExHentaiDownloader:
         except Exception as e:
             self._emit("log", message=t("download.fatal_error", error=e))
             log_failure(url, t("download.fatal_error", error=e))
-            self._cleanup_windows(main_window)
             return "failed"
+        finally:
+            self._cleanup_windows(main_window)
 
     def _wait_for_title(self):
         for title_attempt in range(3):
@@ -305,6 +343,21 @@ class ExHentaiDownloader:
                     return None
         return None
 
+    def _get_page_count(self):
+        try:
+            cells = self.driver.find_elements(By.CSS_SELECTOR, "#gdd td.gdt1")
+            for cell in cells:
+                if cell.text.strip() == "Length:":
+                    sibling = cell.find_element(By.XPATH, "following-sibling::td")
+                    text = sibling.text.strip()
+                    import re
+                    m = re.search(r'(\d+)', text)
+                    if m:
+                        return int(m.group(1))
+            return None
+        except Exception:
+            return None
+
     def _find_archive_link(self):
         try:
             return self.driver.find_element(
@@ -317,25 +370,31 @@ class ExHentaiDownloader:
         try:
             archive_link.click()
         except Exception:
-            pass
-
+            self._emit("log", message=t("download.archive_click_fail"))
+            return None
+        
         for win_attempt in range(3):
             try:
-                WebDriverWait(self.driver, 15).until(
-                    lambda d: len(d.window_handles) > 1)
-                return True
+                WebDriverWait(self.driver, 15).until(lambda d: len(d.window_handles) > 1)
+                break
             except TimeoutException:
                 if win_attempt < 2:
-                    self._emit("log", message=t("download.window_timeout", attempt=win_attempt + 1))
+                    self._emit("log", message=t("download.popup_wait_retry", attempt=win_attempt + 1))
                     try:
                         self.driver.switch_to.window(main_window)
-                        archive_link = self.driver.find_element(
-                            By.XPATH, "//a[contains(text(), 'Archive Download')]")
+                        archive_link = self.driver.find_element(By.XPATH, "//a[contains(text(), 'Archive Download')]")
                         archive_link.click()
                     except Exception:
                         pass
                     time.sleep(2)
-        return False
+                else:
+                    return None
+        
+        for w in self.driver.window_handles:
+            if w != main_window:
+                self.driver.switch_to.window(w)
+                return w
+        return None
 
     def _get_download_url(self, main_window):
         for attempt in range(3):
@@ -369,7 +428,10 @@ class ExHentaiDownloader:
                                 (By.XPATH,
                                  "//input[@type='submit' and contains(@value, 'Download')]")))
 
-                    download_button.click()
+                    try:
+                        self.driver.execute_script("arguments[0].click();", download_button)
+                    except Exception:
+                        download_button.click()
                     final_link_elem = WebDriverWait(self.driver, 30).until(
                         EC.presence_of_element_located(
                             (By.LINK_TEXT, "Click Here To Start Downloading")))
@@ -380,32 +442,35 @@ class ExHentaiDownloader:
         return None
 
     def _close_extra_tab(self, main_window):
-        try:
-            self.driver.close()
-            self.driver.switch_to.window(main_window)
-        except Exception:
-            pass
+        pass
 
     def _cleanup_windows(self, main_window):
         if not main_window:
             return
         try:
-            for w in list(self.driver.window_handles):
-                if w != main_window:
-                    try:
-                        self.driver.switch_to.window(w)
-                        self.driver.close()
-                    except Exception:
-                        pass
-            self.driver.switch_to.window(main_window)
+            handles = self.driver.window_handles
+            if len(handles) > 1:
+                for w in list(handles):
+                    if w != main_window:
+                        try:
+                            self.driver.switch_to.window(w)
+                            self.driver.close()
+                        except Exception:
+                            pass
+            
+            handles = self.driver.window_handles
+            if main_window in handles:
+                self.driver.switch_to.window(main_window)
+            elif handles:
+                self.driver.switch_to.window(handles[0])
         except Exception:
             pass
 
-    def _download_file(self, url, filename, cookies, user_agent):
+    def _download_file(self, url, filename, cookies, user_agent, num_threads=1):
         for attempt in range(1, MAX_DOWNLOAD_RETRIES + 1):
             if self._shutdown_flag.is_set():
                 return False, _USER_CANCELLED
-            success, error = self._download_attempt(url, filename, cookies, user_agent)
+            success, error = self._download_attempt(url, filename, cookies, user_agent, num_threads)
             if success:
                 return True, None
             if error == _USER_CANCELLED:
@@ -422,11 +487,46 @@ class ExHentaiDownloader:
                 return False, error
         return False, error
 
-    def _download_attempt(self, url, filename, cookies, user_agent):
+    def _download_attempt(self, url, filename, cookies, user_agent, num_threads=1):
+        if num_threads <= 1:
+            return self._download_single(url, filename, cookies, user_agent)
+
+        fname = os.path.basename(filename)
+        headers = {'User-Agent': user_agent} if user_agent else {}
+
+        total_size = 0
+        try:
+            with requests.head(url, headers=headers, cookies=cookies, timeout=(30, 30)) as hr:
+                if hr.status_code == 200:
+                    total_size = int(hr.headers.get('content-length', 0))
+        except Exception:
+            pass
+
+        if total_size < 1024 * 1024:
+            return self._download_single(url, filename, cookies, user_agent)
+
+        chunk_size = total_size // num_threads
+        chunks = []
+        for i in range(num_threads):
+            start = i * chunk_size
+            end = start + chunk_size - 1 if i < num_threads - 1 else total_size - 1
+            if start <= end:
+                chunks.append((i, start, end))
+
+        if len(chunks) <= 1:
+            return self._download_single(url, filename, cookies, user_agent)
+
+        self._emit("log", message=t("download.chunked_downloading",
+                                    filename=fname, threads=len(chunks)))
+        return self._download_chunked(url, filename, cookies, user_agent, total_size, chunks, fname)
+
+    def _download_single(self, url, filename, cookies, user_agent):
         fname = os.path.basename(filename)
         headers = {'User-Agent': user_agent} if user_agent else {}
         part_filename = filename + ".part"
         downloaded = 0
+        self._last_progress_emit = 0
+        self._last_progress_bytes = 0
 
         if os.path.exists(part_filename):
             downloaded = os.path.getsize(part_filename)
@@ -499,3 +599,91 @@ class ExHentaiDownloader:
                 else:
                     self._emit("log", message=t("download.part_kept", filename=fname))
             return False, e
+
+    def _download_chunked(self, url, filename, cookies, user_agent, total_size, chunks, fname):
+        progress_lock = threading.Lock()
+        chunk_downloaded = [0] * len(chunks)
+        chunk_temp_files = []
+        last_emit = [0.0]
+        last_bytes = [0]
+
+        def _fetch_chunk(idx, start, end):
+            part_file = f"{filename}.part.{idx}"
+            chunk_temp_files.append(part_file)
+            chunk_headers = {'User-Agent': user_agent} if user_agent else {}
+            chunk_headers['Range'] = f'bytes={start}-{end}'
+            try:
+                with requests.get(url, stream=True, cookies=cookies,
+                                  headers=chunk_headers, timeout=(30, 180)) as r:
+                    r.raise_for_status()
+                    if r.status_code not in (200, 206):
+                        return (idx, False)
+                    with open(part_file, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=65536):
+                            if self._shutdown_flag.is_set():
+                                return (idx, False)
+                            if chunk:
+                                f.write(chunk)
+                                with progress_lock:
+                                    chunk_downloaded[idx] += len(chunk)
+                                    now = time.time()
+                                    if now - last_emit[0] > 0.15:
+                                        all_dl = sum(chunk_downloaded)
+                                        speed = 0
+                                        if last_bytes[0] > 0:
+                                            speed = int((all_dl - last_bytes[0]) / (now - last_emit[0]))
+                                        self._emit("progress", filename=fname,
+                                                   current=all_dl, total=total_size,
+                                                   speed_bytes=speed)
+                                        last_emit[0] = now
+                                        last_bytes[0] = all_dl
+                return (idx, True)
+            except Exception:
+                return (idx, False)
+
+        with ThreadPoolExecutor(max_workers=len(chunks)) as executor:
+            futures = {executor.submit(_fetch_chunk, idx, start, end): idx
+                       for idx, start, end in chunks}
+            for future in as_completed(futures):
+                if self._shutdown_flag.is_set():
+                    executor.shutdown(wait=False)
+                    self._cleanup_chunks(chunk_temp_files)
+                    return False, _USER_CANCELLED
+                idx, ok = future.result()
+                if not ok:
+                    executor.shutdown(wait=False)
+                    self._cleanup_chunks(chunk_temp_files)
+                    self._emit("log", message=t("download.chunk_fail", idx=idx))
+                    return False, Exception(f"Chunk {idx} download failed")
+
+        if self._shutdown_flag.is_set():
+            self._cleanup_chunks(chunk_temp_files)
+            return False, _USER_CANCELLED
+
+        self._emit("log", message=t("download.chunked_merging"))
+        self._merge_chunks(filename, chunks)
+        self._cleanup_chunks(chunk_temp_files)
+
+        self._emit("progress", filename=fname, current=total_size,
+                   total=total_size, done=True)
+        self._emit("log", message=t("download.chunked_complete", filename=fname))
+        return True, None
+
+    def _merge_chunks(self, filename, chunks):
+        with open(filename, 'wb') as out:
+            for idx, start, end in chunks:
+                part_file = f"{filename}.part.{idx}"
+                with open(part_file, 'rb') as inp:
+                    while True:
+                        data = inp.read(1024 * 1024)
+                        if not data:
+                            break
+                        out.write(data)
+
+    def _cleanup_chunks(self, chunk_files):
+        for f in chunk_files:
+            try:
+                if os.path.exists(f):
+                    os.remove(f)
+            except Exception:
+                pass

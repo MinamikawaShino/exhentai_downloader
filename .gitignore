@@ -6,6 +6,9 @@ __pycache__/
 dist/
 build/
 *.spec
+MODULE_FLOW.md
+.gitignore
+version_info.py
 
 # Virtual environments
 venv/
@@ -20,10 +23,12 @@ env/
 
 # Project specific
 *.part
-data/settings.json
+data/
 log/
 downloads/
 bak/
+html/
+test_dedup_dir/
 
 # OS
 .DS_Store

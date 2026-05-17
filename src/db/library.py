@@ -99,3 +99,18 @@ def remove_library_path(path: str):
     conn.execute("DELETE FROM library_items WHERE path = ?", (path,))
     conn.commit()
     conn.close()
+
+
+def find_library_folder_count(library_paths: list, title: str) -> tuple:
+    for lib_path in library_paths:
+        if not os.path.isdir(lib_path):
+            continue
+        try:
+            with os.scandir(lib_path) as entries:
+                for entry in entries:
+                    if entry.is_dir() and normalize_for_comparison(entry.name) == normalize_for_comparison(title):
+                        file_count = sum(1 for f in os.scandir(entry.path) if f.is_file())
+                        return (entry.path, file_count)
+        except Exception:
+            continue
+    return (None, 0)

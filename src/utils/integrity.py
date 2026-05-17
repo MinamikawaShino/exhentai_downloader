@@ -18,7 +18,11 @@ def extract_zip(filepath: str, extract_to: str = None) -> bool:
     os.makedirs(extract_to, exist_ok=True)
     try:
         with zipfile.ZipFile(filepath, 'r') as zf:
-            zf.extractall(extract_to)
+            for member in zf.infolist():
+                target_path = os.path.join(extract_to, member.filename)
+                if os.path.exists(target_path):
+                    continue
+                zf.extract(member, extract_to)
         return True
     except Exception:
         return False

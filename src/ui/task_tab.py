@@ -7,7 +7,7 @@ import customtkinter as ctk
 from ..i18n import t
 from ..utils.logging_utils import load_queue, load_failed_urls
 from ..config import load_config
-from .widgets import STATUS_COLORS, format_size, format_time
+from .widgets import STATUS_COLORS, format_size, format_time, C, S, R, apple_pill_button, apple_ghost_button, apple_danger_button
 
 
 class TaskTab:
@@ -47,116 +47,135 @@ class TaskTab:
             for url in self.app.downloader.get_queue():
                 self._add_task_item(url, "PENDING")
 
+    def _gather_values(self):
+        return {
+            "url_text": self.url_text.get("1.0", "end-1c"),
+        }
+
+    def _restore_values(self, vals):
+        url_text = vals.get("url_text", "")
+        if url_text:
+            self.url_text.delete("1.0", "end")
+            self.url_text.insert("1.0", url_text)
+
     def _build(self, parent):
         parent.grid_columnconfigure(0, weight=1)
-        parent.grid_rowconfigure(3, weight=3)
-        parent.grid_rowconfigure(5, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
 
-        url_frame = ctk.CTkFrame(parent)
-        url_frame.grid(row=0, column=0, sticky="ew", pady=(8, 4))
+        scroll = ctk.CTkScrollableFrame(parent, corner_radius=0)
+        scroll.grid(row=0, column=0, sticky="nsew")
+        scroll.grid_columnconfigure(0, weight=1)
+
+        # URL input + browser + download controls
+        url_frame = ctk.CTkFrame(scroll, corner_radius=R.LG)
+        url_frame.grid(row=0, column=0, sticky="ew", pady=(0, S.SM))
         url_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(url_frame, text=t("task.url_input"),
-                     font=self.app.fonts.subheading).grid(row=0, column=0, sticky="w", padx=8, pady=(6, 2))
+                     font=self.app.fonts.heading).grid(row=0, column=0, sticky="w", padx=S.LG, pady=(S.MD, S.XS))
         self.url_text = ctk.CTkTextbox(url_frame, height=80,
-                                       font=self.app.fonts.mono_body)
-        self.url_text.grid(row=1, column=0, sticky="ew", padx=8, pady=(2, 4))
+                                       font=self.app.fonts.textbox_body,
+                                       corner_radius=R.MD)
+        self.url_text.grid(row=1, column=0, sticky="ew", padx=S.LG, pady=(S.XS, S.XS))
 
         btn_row = ctk.CTkFrame(url_frame, fg_color="transparent")
-        btn_row.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 4))
-        ctk.CTkButton(btn_row, text=t("task.add_url"), width=90,
-                      command=self._add_urls).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(btn_row, text=t("task.load_failed"), width=80, fg_color="gray40",
-                      command=self._load_failed).pack(side="left", padx=2)
-        ctk.CTkButton(btn_row, text=t("task.load_queue"), width=80, fg_color="gray40",
-                      command=self._load_queue).pack(side="left", padx=2)
-        ctk.CTkButton(btn_row, text=t("task.clear"), width=80, fg_color="transparent", border_width=1,
-                      command=self._clear_urls).pack(side="left", padx=2)
+        btn_row.grid(row=2, column=0, sticky="ew", padx=S.LG, pady=(0, S.XS))
+        apple_pill_button(btn_row, t("task.add_url"), self._add_urls, width=100).pack(side="left", padx=(0, S.XS))
+        apple_ghost_button(btn_row, t("task.load_failed"), self._load_failed, width=90).pack(side="left", padx=S.XXS)
+        apple_ghost_button(btn_row, t("task.load_queue"), self._load_queue, width=90).pack(side="left", padx=S.XXS)
+        apple_danger_button(btn_row, t("task.clear"), self._clear_urls, width=70).pack(side="left", padx=S.XXS)
+
+        # Download controls row
+        ctrl_row = ctk.CTkFrame(url_frame, fg_color="transparent")
+        ctrl_row.grid(row=3, column=0, sticky="ew", padx=S.LG, pady=(0, S.XS))
+        self.start_btn = apple_pill_button(ctrl_row, t("task.start"), self._start_download,
+                                            width=100, color=C.SUCCESS, hover_color=C.SUCCESS_HOVER)
+        self.start_btn.pack(side="left", padx=(0, S.XS))
+        self.stop_btn = apple_danger_button(ctrl_row, t("task.stop"), self._stop_download, width=80)
+        self.stop_btn.configure(state="disabled")
+        self.stop_btn.pack(side="left", padx=(0, S.XS))
+        apple_ghost_button(ctrl_row, t("task.retry_failed"), self._retry_failed, width=90).pack(side="left", padx=S.XS)
+
+        # Browser controls row
+        browser_row = ctk.CTkFrame(url_frame, fg_color="transparent")
+        browser_row.grid(row=4, column=0, sticky="ew", padx=S.LG, pady=(0, S.MD))
+        self._launch_btn = apple_pill_button(browser_row, t("settings.launch_browser"),
+                                              self._launch_browser, width=120, color=C.SUCCESS,
+                                              hover_color=C.SUCCESS_HOVER)
+        self._launch_btn.pack(side="left", padx=(0, S.SM))
+        self._connect_btn = apple_pill_button(browser_row, t("settings.connect_browser"),
+                                                self._connect_browser, width=120)
+        self._connect_btn.pack(side="left")
+        self._browser_status = ctk.CTkLabel(browser_row, text="",
+                                             font=self.app.fonts.body, text_color=C.INK_MUTED_48)
+        self._browser_status.pack(side="left", padx=S.LG)
+        apple_danger_button(browser_row, t("task.exit"), self.app.on_close, width=70).pack(side="right")
 
         # Stats
-        stats_frame = ctk.CTkFrame(parent)
-        stats_frame.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        stats_frame = ctk.CTkFrame(scroll, corner_radius=R.LG)
+        stats_frame.grid(row=1, column=0, sticky="ew", pady=(0, S.SM))
         cols = ctk.CTkFrame(stats_frame, fg_color="transparent")
-        cols.pack(fill="x", padx=12, pady=8)
+        cols.pack(fill="x", padx=S.LG, pady=S.MD)
         for i, key in enumerate(["queue", "completed", "failed", "current"]):
             ctk.CTkLabel(cols, text=t(f"task.stats.{key}") + ":",
-                         text_color="gray50", font=self.app.fonts.body).grid(
-                row=0, column=i * 2, sticky="e", padx=(16, 4))
-            lbl = ctk.CTkLabel(cols, text="0", font=self.app.fonts.subheading)
-            lbl.grid(row=0, column=i * 2 + 1, sticky="w", padx=(0, 18))
+                         font=self.app.fonts.caption, text_color=C.INK_MUTED_48).grid(
+                row=0, column=i * 2, sticky="e", padx=(S.SM, S.XXS))
+            lbl = ctk.CTkLabel(cols, text="0", font=self.app.fonts.heading)
+            lbl.grid(row=0, column=i * 2 + 1, sticky="w", padx=(0, S.LG))
             self._stat_labels[key] = lbl
         cols.grid_columnconfigure(7, weight=1)
 
-        # File progress
-        prog_frame = ctk.CTkFrame(parent)
-        prog_frame.grid(row=2, column=0, sticky="ew", pady=(0, 6))
+        # Progress
+        prog_frame = ctk.CTkFrame(scroll, corner_radius=R.LG)
+        prog_frame.grid(row=2, column=0, sticky="ew", pady=(0, S.SM))
         self.file_label = ctk.CTkLabel(prog_frame, text=t("task.file_progress_ready"),
-                                       text_color="gray60", font=self.app.fonts.body)
-        self.file_label.pack(side="top", anchor="w", padx=12, pady=(8, 0))
-        self.file_progress = ctk.CTkProgressBar(prog_frame, height=8)
-        self.file_progress.pack(fill="x", padx=12, pady=(2, 0))
+                                       font=self.app.fonts.body, text_color=C.INK_MUTED_48)
+        self.file_label.pack(side="top", anchor="w", padx=S.LG, pady=(S.MD, S.XXS))
+        self.file_progress = ctk.CTkProgressBar(prog_frame, height=6,
+                                                 progress_color=C.PRIMARY,
+                                                 fg_color=C.DIVIDER_SOFT)
+        self.file_progress.pack(fill="x", padx=S.LG, pady=(0, S.XXS))
         self.file_progress.set(0)
         self.speed_label = ctk.CTkLabel(prog_frame, text="",
-                                        text_color="gray50", font=self.app.fonts.small)
-        self.speed_label.pack(side="top", anchor="w", padx=12)
+                                        font=self.app.fonts.caption, text_color=C.INK_MUTED_48)
+        self.speed_label.pack(side="top", anchor="w", padx=S.LG, pady=(0, S.XS))
 
         self.queue_label = ctk.CTkLabel(prog_frame, text=t("task.queue_progress", done=0, total=0),
-                                        text_color="gray60", font=self.app.fonts.body)
-        self.queue_label.pack(side="top", anchor="w", padx=12)
-        self.queue_progress = ctk.CTkProgressBar(prog_frame, height=8)
-        self.queue_progress.pack(fill="x", padx=12, pady=(2, 6))
+                                        font=self.app.fonts.body, text_color=C.INK_MUTED_48)
+        self.queue_label.pack(side="top", anchor="w", padx=S.LG, pady=(0, S.XS))
+        self.queue_progress = ctk.CTkProgressBar(prog_frame, height=6,
+                                                   progress_color=C.PRIMARY,
+                                                   fg_color=C.DIVIDER_SOFT)
+        self.queue_progress.pack(fill="x", padx=S.LG, pady=(0, S.MD))
         self.queue_progress.set(0)
 
         # Task list
-        task_frame = ctk.CTkFrame(parent)
-        task_frame.grid(row=3, column=0, sticky="nsew", pady=(0, 6))
-        task_frame.grid_rowconfigure(0, weight=1)
+        task_frame = ctk.CTkFrame(scroll, corner_radius=R.LG)
+        task_frame.grid(row=3, column=0, sticky="ew", pady=(0, S.SM))
+        task_frame.grid_rowconfigure(1, weight=1)
         task_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(task_frame, text=t("task.task_list"),
-                     font=self.app.fonts.subheading).grid(row=0, column=0, sticky="nw", padx=8, pady=(6, 0))
-        self.task_scroll = ctk.CTkScrollableFrame(task_frame)
-        self.task_scroll.grid(row=1, column=0, sticky="nsew", padx=6, pady=(2, 4))
+                     font=self.app.fonts.heading).grid(row=0, column=0, sticky="nw", padx=S.LG, pady=(S.MD, S.XS))
+        self.task_scroll = ctk.CTkScrollableFrame(task_frame, height=150)
+        self.task_scroll.grid(row=1, column=0, sticky="nsew", padx=S.SM, pady=(0, S.SM))
         self.task_scroll.grid_columnconfigure(0, weight=1)
 
         # Log
-        log_frame = ctk.CTkFrame(parent)
-        log_frame.grid(row=4, column=0, sticky="nsew", pady=4)
-        log_frame.grid_rowconfigure(0, weight=1)
+        log_frame = ctk.CTkFrame(scroll, corner_radius=R.LG)
+        log_frame.grid(row=4, column=0, sticky="ew", pady=(0, S.SM))
+        log_frame.grid_rowconfigure(1, weight=1)
         log_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(log_frame, text=t("task.log"),
-                     font=self.app.fonts.subheading).grid(row=0, column=0, sticky="nw", padx=8, pady=(6, 0))
-        self.log_text = ctk.CTkTextbox(log_frame, font=self.app.fonts.mono_small, wrap="word")
-        self.log_text.grid(row=1, column=0, sticky="nsew", padx=6, pady=(2, 4))
+                     font=self.app.fonts.heading).grid(row=0, column=0, sticky="nw", padx=S.LG, pady=(S.MD, S.XS))
+        self.log_text = ctk.CTkTextbox(log_frame, font=self.app.fonts.textbox_small, wrap="word",
+                                       corner_radius=R.MD, height=120)
+        self.log_text.grid(row=1, column=0, sticky="nsew", padx=S.LG, pady=(0, S.MD))
         self.log_text.configure(state="disabled")
 
-        # Controls
-        ctrl_frame = ctk.CTkFrame(parent)
-        ctrl_frame.grid(row=6, column=0, sticky="ew")
+    def get_connect_btn(self):
+        return self._connect_btn
 
-        browser_row = ctk.CTkFrame(ctrl_frame, fg_color="transparent")
-        browser_row.pack(fill="x", padx=8, pady=(6, 0))
-        self._launch_btn = ctk.CTkButton(browser_row, text=t("settings.launch_browser"), width=100,
-                                         fg_color="#2ECC71", hover_color="#27AE60",
-                                         command=self._launch_browser)
-        self._launch_btn.pack(side="left", padx=(0, 6))
-        self._connect_btn = ctk.CTkButton(browser_row, text=t("settings.connect_browser"), width=100,
-                                          command=self._connect_browser)
-        self._connect_btn.pack(side="left")
-        self._browser_status = ctk.CTkLabel(browser_row, text="", text_color="gray50",
-                                            font=self.app.fonts.body)
-        self._browser_status.pack(side="left", padx=12)
-
-        pad = ctk.CTkFrame(ctrl_frame, fg_color="transparent")
-        pad.pack(fill="x", padx=8, pady=(2, 6))
-        self.start_btn = ctk.CTkButton(pad, text=t("task.start"), width=110, fg_color="#2ECC71",
-                                       hover_color="#27AE60", command=self._start_download)
-        self.start_btn.pack(side="left", padx=(0, 6))
-        self.stop_btn = ctk.CTkButton(pad, text=t("task.stop"), width=90, fg_color="#E74C3C",
-                                      hover_color="#C0392B", state="disabled", command=self._stop_download)
-        self.stop_btn.pack(side="left", padx=(0, 6))
-        ctk.CTkButton(pad, text=t("task.retry_failed"), width=90, fg_color="gray40",
-                      command=self._retry_failed).pack(side="left", padx=2)
-        ctk.CTkButton(pad, text=t("task.exit"), width=70, fg_color="transparent", border_width=1,
-                      command=self.app.on_close).pack(side="right", padx=2)
+    def get_launch_btn(self):
+        return self._launch_btn
 
     def log(self, message: str):
         print(message, flush=True)
@@ -208,17 +227,17 @@ class TaskTab:
     def set_browser_connected(self):
         self._connect_btn.configure(state="disabled", text=t("settings.connected_btn"))
         self._launch_btn.configure(state="disabled")
-        self._browser_status.configure(text="● " + t("app.connected"), text_color="#2ECC71")
+        self._browser_status.configure(text="● " + t("app.connected"), text_color=C.SUCCESS)
 
     def set_browser_connecting(self):
         self._connect_btn.configure(state="disabled", text="...")
         self._launch_btn.configure(state="disabled")
-        self._browser_status.configure(text="● " + t("app.connecting"), text_color="#D4A017")
+        self._browser_status.configure(text="● " + t("app.connecting"), text_color=C.WARNING)
 
     def set_browser_disconnected(self):
         self._connect_btn.configure(state="normal", text=t("settings.connect_browser"))
         self._launch_btn.configure(state="normal")
-        self._browser_status.configure(text="● " + t("app.not_connected"), text_color="gray50")
+        self._browser_status.configure(text="● " + t("app.not_connected"), text_color=C.INK_MUTED_48)
 
     def _add_urls(self):
         text = self.url_text.get("1.0", "end-1c").strip()
@@ -313,22 +332,23 @@ class TaskTab:
             self._start_download()
 
     def _add_task_item(self, url, status):
-        row = ctk.CTkFrame(self.task_scroll, fg_color="transparent", height=32)
-        row.pack(fill="x", pady=2)
+        row = ctk.CTkFrame(self.task_scroll, corner_radius=R.SM, height=36)
+        row.pack(fill="x", pady=S.XXS, padx=S.XS)
+        row.grid_columnconfigure(0, weight=1)
         short = url if len(url) <= 70 else url[:67] + "..."
         ctk.CTkLabel(row, text=short, anchor="w",
-                     font=self.app.fonts.body).pack(side="left", padx=(6, 10))
-        color = STATUS_COLORS.get(status, ("gray50", "gray30"))[0]
+                     font=self.app.fonts.body).grid(row=0, column=0, sticky="w", padx=(S.SM, S.MD), pady=S.XXS)
+        color = STATUS_COLORS.get(status, (C.INK_MUTED_48, C.INK_MUTED_48))[0]
         status_text = t(f"status.{status.lower()}")
         lbl = ctk.CTkLabel(row, text=status_text, text_color=color,
-                           font=self.app.fonts.body)
-        lbl.pack(side="right", padx=6)
+                           font=self.app.fonts.body_strong)
+        lbl.grid(row=0, column=1, sticky="e", padx=S.SM, pady=S.XXS)
         self._task_widgets[url] = (row, lbl)
 
     def update_task_item(self, url, status):
         if url in self._task_widgets:
             _, lbl = self._task_widgets[url]
-            color = STATUS_COLORS.get(status, ("gray50", "gray30"))[0]
+            color = STATUS_COLORS.get(status, (C.INK_MUTED_48, C.INK_MUTED_48))[0]
             status_text = t(f"status.{status.lower()}")
             lbl.configure(text=status_text, text_color=color)
         else:
@@ -342,12 +362,12 @@ class TaskTab:
             for url in self.app.downloader.get_queue():
                 self._add_task_item(url, "PENDING")
 
-    def update_queue_stats(self, queue_cnt: int, completed: int, failed: int, total: int, current_url: str = ""):
+    def update_queue_stats(self, queue_cnt: int, completed: int, failed: int, total: int, current_url: str = "", skipped: int = 0):
         self._stat_labels["queue"].configure(text=str(queue_cnt))
         self._stat_labels["completed"].configure(text=str(completed))
         self._stat_labels["failed"].configure(text=str(failed))
         self._stat_labels["current"].configure(text=os.path.basename(current_url) if current_url else "-")
-        done = completed + failed
+        done = completed + failed + skipped
         self.queue_label.configure(text=t("task.queue_progress", done=done, total=total))
         self.queue_progress.set(done / total if total else 0)
 

@@ -50,6 +50,8 @@ class CLIDownloader:
             download_dir=self.config["download_dir"],
             library_paths=get_library_paths(),
             chrome_debug_port=self.config["chrome_port"],
+            skip_page_threshold=self.config.get("skip_page_threshold", 5),
+            download_threads=self.config.get("download_threads", 2),
         )
         self.downloader.set_callback(self._on_event)
         self.downloader.set_urls(urls)
@@ -170,13 +172,14 @@ class CLIDownloader:
         status = data.get("status", "")
         completed = data.get("completed", 0)
         failed = data.get("failed", 0)
+        skipped = data.get("skipped", 0)
         total = data.get("total", 0)
         label = t(f"status.{status.lower()}")
         if status == "PROCESSING":
             print(f"\n--- [{label}] {url}")
         else:
             print(f"[{label}] {url}")
-        print(f"  Progress: {completed + failed}/{total}  "
+        print(f"  Progress: {completed + failed + skipped}/{total}  "
               f"OK: {completed}  Fail: {failed}")
 
     def _handle_finished(self, data: dict):
