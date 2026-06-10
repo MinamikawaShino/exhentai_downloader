@@ -1,4 +1,4 @@
-[简体中文](README.zh-cn.md) | [繁體中文](README.zh-tw.md) | [日本語](README.jp.md) | [Русский](README.ru.md)
+[简体中文](README.zh-cn.md) | [繁體中文](README.zh-tw.md) | [日本語](README.ja.md) | [Русский](README.ru.md)
 ---
 
 
@@ -159,7 +159,8 @@ Input gallery URL -> Navigate page -> Extract title -> Dedup check
 - Manual e-hentai login + CloudFlare bypass must be done once in the browser
 - Downloaded archives are ZIP format, saved as `GalleryTitle.zip`
 - When auto-extract is enabled, archives extract into `ExtractDir/GalleryTitle/`
-
+<<<<<<< HEAD
+=======
 
 ---
 
@@ -168,3 +169,4 @@ Input gallery URL -> Navigate page -> Extract title -> Dedup check
 - **Cross-Folder Rule**: Only when comparing across *different* folders, the newest folder retains the files, and old image copies in other folders are deleted.
 - **Folder Overlap**: If the overlap ratio of identical images between two folders exceeds the configured threshold (default 50%), the folder with the oldest modification date is deleted.
 - **Ad Image Removal**: Deletes advertisement images by comparing the *last 6 images* (sorted by name) across folders. If the overlap exceeds the threshold (default 50%), the oldest folder is deleted. You can customize this threshold in the settings.
+>>>>>>> ac50f8d (新增库管理功能，改进GUI体验)
