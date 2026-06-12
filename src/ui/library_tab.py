@@ -79,6 +79,7 @@ class LibraryTab:
             "white_bg": self.white_bg_var.get(),
             "db_skip": self.db_skip_var.get(),
             "overlap_threshold": self.overlap_threshold_var.get(),
+            "ad_scan_count": self.ad_scan_count_var.get(),
         }
 
     def _restore_values(self, vals):
@@ -91,6 +92,7 @@ class LibraryTab:
         self.white_bg_var.set(vals.get("white_bg", False))
         self.db_skip_var.set(vals.get("db_skip", False))
         self.overlap_threshold_var.set(vals.get("overlap_threshold", 50))
+        self.ad_scan_count_var.set(vals.get("ad_scan_count", 6))
 
     def _get_db(self):
         if self._db is not None:
@@ -158,6 +160,12 @@ class LibraryTab:
                      corner_radius=R.SM).pack(side="left")
         ctk.CTkLabel(thresh_row, text="%",
                      font=self.app.fonts.body).pack(side="left", padx=(S.XXS, 0))
+
+        ctk.CTkLabel(thresh_row, text=t("lib.ad_scan_count"),
+                     font=self.app.fonts.body).pack(side="left", padx=(S.LG, S.XS))
+        self.ad_scan_count_var = ctk.IntVar(value=6)
+        ctk.CTkEntry(thresh_row, textvariable=self.ad_scan_count_var, width=60,
+                     corner_radius=R.SM).pack(side="left")
 
         db_row = ctk.CTkFrame(f1, fg_color="transparent")
         db_row.pack(fill="x", padx=S.LG, pady=(0, S.XS))
@@ -471,6 +479,7 @@ class LibraryTab:
         do_dedup = self.scan_dedup_var.get()
         do_folder_dedup = self.folder_dedup_var.get()
         do_ad_scan = self.ad_scan_var.get()
+        ad_scan_count = max(1, min(100, self.ad_scan_count_var.get()))
         overlap_threshold = max(1, min(100, self.overlap_threshold_var.get())) / 100.0
         db_skip = self.db_skip_var.get()
         db = self._get_db() if not db_skip and cfg.get("db_enable", True) else None
@@ -512,7 +521,7 @@ class LibraryTab:
                         reset_interrupt()
                         from ..imgchk.dedup import scan_ad_duplicates
                         ad_dedup_dir = Path(str(source_dir) + "_Ad_Folders")
-                        ar = scan_ad_duplicates(source_dir, ad_dedup_dir, overlap_threshold, threads, logger)
+                        ar = scan_ad_duplicates(source_dir, ad_dedup_dir, overlap_threshold, ad_scan_count, threads, logger)
                         self.result_queue.put(("ad_scan", ar))
             except Exception as e:
                 self.result_queue.put(("error", str(e)))

@@ -180,6 +180,7 @@ JP = {
     "lib.col_size": "サイズ",
     "lib.col_status": "ステータス",
     "lib.ad_scan": "広告画像を削除",
+        "lib.ad_scan_count": "広告画像スキャン数:",
     "lib.overlap_threshold": "重複率%:",
 
     # Settings - scan

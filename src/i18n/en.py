@@ -192,6 +192,7 @@ EN = {
     "lib.col_size": "Size",
     "lib.col_status": "Status",
     "lib.ad_scan": "Remove ad images",
+        "lib.ad_scan_count": "Ad scan image count:",
     "lib.overlap_threshold": "Overlap %:",
 
     # Settings - scan
