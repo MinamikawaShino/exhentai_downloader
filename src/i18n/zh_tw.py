@@ -180,6 +180,7 @@ ZH_TW = {
     "lib.col_size": "大小",
     "lib.col_status": "狀態",
     "lib.ad_scan": "刪除廣告圖",
+        "lib.ad_scan_count": "廣告圖掃描數量:",
     "lib.overlap_threshold": "重疊率%:",
 
     # Settings - scan

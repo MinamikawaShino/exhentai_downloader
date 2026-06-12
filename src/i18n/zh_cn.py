@@ -180,6 +180,7 @@ ZH_CN = {
     "lib.col_size": "大小",
     "lib.col_status": "状态",
     "lib.ad_scan": "删除广告图",
+        "lib.ad_scan_count": "广告图扫描数量:",
     "lib.overlap_threshold": "重叠率%:",
 
     # Settings - scan

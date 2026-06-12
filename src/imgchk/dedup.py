@@ -139,6 +139,7 @@ def find_duplicates(
 def find_ad_images(
     source_dir: Path,
     overlap_threshold: float = 0.5,
+    ad_scan_count: int = 6,
     threads: int = 12,
     logger: logging.Logger = None,
 ):
@@ -152,7 +153,7 @@ def find_ad_images(
 
     The folder with the oldest modification time is the one deleted.
     """
-    last_n = 6
+    last_n = ad_scan_count
     all_files = collect_image_files(source_dir)
 
     if logger:
@@ -171,6 +172,7 @@ def find_ad_images(
         folder_files[folder].sort(key=lambda f: f.name)
 
     folder_tail_hashes: dict[str, set[str]] = {}
+    folder_tail_files: dict[str, list[Path]] = {}
     folder_mtime: dict[str, float] = {}
     folder_total: dict[str, int] = {}
 
@@ -187,13 +189,14 @@ def find_ad_images(
             if md5:
                 hash_set.add(md5)
         folder_tail_hashes[folder] = hash_set
+        folder_tail_files[folder] = tail
 
         try:
             folder_mtime[folder] = (Path(source_dir) / folder).stat().st_mtime
         except OSError:
             folder_mtime[folder] = 0.0
 
-    to_delete: dict[str, tuple[str, int]] = {}
+    to_delete: dict[str, tuple[str, int, list[Path]]] = {}
     folder_list = list(folder_tail_hashes.keys())
 
     for i in range(len(folder_list)):
@@ -218,17 +221,36 @@ def find_ad_images(
             if max_ratio >= overlap_threshold:
                 mtime_a = folder_mtime.get(fa, 0)
                 mtime_b = folder_mtime.get(fb, 0)
+                total_a = folder_total.get(fa, 0)
+                total_b = folder_total.get(fb, 0)
+                min_total = min(total_a, total_b)
+                max_total = max(total_a, total_b)
 
-                if mtime_a <= mtime_b:
-                    delete_folder = fa
-                    kept_folder = fb
+                if max_total > 0 and (min_total / max_total) >= 0.8:
+                    if mtime_a <= mtime_b:
+                        delete_folder = fa
+                        kept_folder = fb
+                    else:
+                        delete_folder = fb
+                        kept_folder = fa
                 else:
-                    delete_folder = fb
-                    kept_folder = fa
+                    if total_a < total_b:
+                        delete_folder = fa
+                        kept_folder = fb
+                    elif total_b < total_a:
+                        delete_folder = fb
+                        kept_folder = fa
+                    else:
+                        if mtime_a <= mtime_b:
+                            delete_folder = fa
+                            kept_folder = fb
+                        else:
+                            delete_folder = fb
+                            kept_folder = fa
 
                 if delete_folder not in to_delete:
                     pct = round(max_ratio * 100)
-                    to_delete[delete_folder] = (kept_folder, pct)
+                    to_delete[delete_folder] = (kept_folder, pct, folder_tail_files[delete_folder])
                     if logger:
                         logger.info("Ad overlap: %s <-> %s (%d%%), delete older: %s",
                                     fa, fb, pct, delete_folder)
@@ -587,13 +609,30 @@ def find_folder_overlaps(
             if max_ratio >= overlap_threshold:
                 mtime_a = folder_mtime.get(fa, 0)
                 mtime_b = folder_mtime.get(fb, 0)
+                min_total = min(total_a, total_b)
+                max_total = max(total_a, total_b)
 
-                if mtime_a <= mtime_b:
-                    delete_folder = fa
-                    kept_folder = fb
+                if max_total > 0 and (min_total / max_total) >= 0.8:
+                    if mtime_a <= mtime_b:
+                        delete_folder = fa
+                        kept_folder = fb
+                    else:
+                        delete_folder = fb
+                        kept_folder = fa
                 else:
-                    delete_folder = fb
-                    kept_folder = fa
+                    if total_a < total_b:
+                        delete_folder = fa
+                        kept_folder = fb
+                    elif total_b < total_a:
+                        delete_folder = fb
+                        kept_folder = fa
+                    else:
+                        if mtime_a <= mtime_b:
+                            delete_folder = fa
+                            kept_folder = fb
+                        else:
+                            delete_folder = fb
+                            kept_folder = fa
 
                 if delete_folder not in to_delete:
                     pct = round(max_ratio * 100)
@@ -681,10 +720,46 @@ def scan_folder_duplicates(
     return {"folders_moved": moved, "failed": failed}
 
 
+
+def move_ad_images_to_dedup(
+    folder_rel: str,
+    kept_folder: str,
+    overlap_pct: int,
+    tail_files: list[Path],
+    source_dir: Path,
+    folder_dedup_dir: Path,
+    logger: logging.Logger = None,
+) -> tuple[int, int]:
+    moved = 0
+    failed = 0
+    dest_folder = folder_dedup_dir / folder_rel
+
+    for src in tail_files:
+        if not src.exists():
+            continue
+        try:
+            rel = src.relative_to(source_dir)
+            dest = folder_dedup_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                dest = dest.parent / f"{dest.stem}_{int(datetime.now().timestamp())}{dest.suffix}"
+            shutil.move(str(src), str(dest))
+            moved += 1
+        except Exception as e:
+            failed += 1
+            if logger:
+                logger.error("Ad image move failed: %s -> %s", src, e)
+
+    if logger and moved > 0:
+        logger.info("Ad images moved from %s (%d%% overlap with %s): %d files", folder_rel, overlap_pct, kept_folder, moved)
+
+    return moved, failed
+
 def scan_ad_duplicates(
     source_dir: Path,
     folder_dedup_dir: Path,
     overlap_threshold: float = 0.5,
+    ad_scan_count: int = 6,
     threads: int = 12,
     logger: logging.Logger = None,
 ):
@@ -695,7 +770,7 @@ def scan_ad_duplicates(
     """
     reset_interrupt()
 
-    to_delete = find_ad_images(source_dir, overlap_threshold, threads, logger)
+    to_delete = find_ad_images(source_dir, overlap_threshold, ad_scan_count, threads, logger)
     if not to_delete or is_interrupted():
         if logger:
             logger.info("No ad-image folders found")
@@ -705,16 +780,14 @@ def scan_ad_duplicates(
     moved = 0
     failed = 0
 
-    for folder_rel, (kept, pct) in sorted(to_delete.items()):
+    for folder_rel, (kept, pct, tail_files) in sorted(to_delete.items()):
         if is_interrupted():
             break
-        ok, _ = move_folder_to_dedup(
-            folder_rel, kept, pct, source_dir, folder_dedup_dir, logger
+        m, f = move_ad_images_to_dedup(
+            folder_rel, kept, pct, tail_files, source_dir, folder_dedup_dir, logger
         )
-        if ok:
-            moved += 1
-        else:
-            failed += 1
+        moved += m
+        failed += f
 
     if logger:
         logger.info("Ad dedup complete: moved %d, failed %d", moved, failed)

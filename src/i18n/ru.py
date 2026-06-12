@@ -180,6 +180,7 @@ RU = {
     "lib.col_size": "Размер",
     "lib.col_status": "Статус",
     "lib.ad_scan": "Удалить рекламу",
+        "lib.ad_scan_count": "Количество рекламных изображений:",
     "lib.overlap_threshold": "Перекрытие %:",
 
     # Settings - scan
