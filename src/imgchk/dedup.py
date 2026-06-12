@@ -36,7 +36,7 @@ def _compute_md5_safe(filepath: Path) -> tuple[Path, str]:
 
 
 def find_duplicates(
-    source_dir: Path,
+    source_dirs: list[Path],
     threads: int = 12,
     logger: logging.Logger = None,
 ):
@@ -46,12 +46,14 @@ def find_duplicates(
     each other, even if their hashes match.  Only cross-folder matches
     are reported, preserving the newest copy (by mtime) in each group.
     """
-    all_files = collect_image_files(source_dir)
+    all_files = []
+    for sd in source_dirs:
+        all_files.extend(collect_image_files(sd))
     total_files = len(all_files)
 
     if logger:
         logger.info("=" * 60)
-        logger.info("Duplicate scan (cross-folder only): %s (threads: %d)", source_dir, threads)
+        logger.info("Duplicate scan (cross-folder only): %s (threads: %d)", [str(d) for d in source_dirs], threads)
         logger.info("Total image files: %d", total_files)
         logger.info("=" * 60)
 
@@ -108,10 +110,14 @@ def find_duplicates(
 
         folder_sets: dict[str, list[Path]] = defaultdict(list)
         for f in files:
-            try:
-                rel = str(f.relative_to(source_dir).parent)
-            except ValueError:
-                rel = ""
+            rel = ""
+            for sd in source_dirs:
+                try:
+                    rel = str(f.relative_to(sd).parent)
+                    rel = f"{sd}|{rel}"
+                    break
+                except ValueError:
+                    pass
             folder_sets[rel].append(f)
 
         if len(folder_sets) <= 1:
@@ -137,7 +143,7 @@ def find_duplicates(
 
 
 def find_ad_images(
-    source_dir: Path,
+    source_dirs: list[Path],
     overlap_threshold: float = 0.5,
     ad_scan_count: int = 6,
     threads: int = 12,
@@ -154,18 +160,24 @@ def find_ad_images(
     The folder with the oldest modification time is the one deleted.
     """
     last_n = ad_scan_count
-    all_files = collect_image_files(source_dir)
+    all_files = []
+    for sd in source_dirs:
+        all_files.extend(collect_image_files(sd))
 
     if logger:
         logger.info("=" * 60)
-        logger.info("Ad image scan: %s (threshold: %d%%, last_n: %d)", source_dir, int(overlap_threshold * 100), last_n)
+        logger.info("Ad image scan: %s (threshold: %d%%, last_n: %d)", [str(d) for d in source_dirs], int(overlap_threshold * 100), last_n)
 
     folder_files: dict[str, list[Path]] = defaultdict(list)
     for f in all_files:
-        try:
-            rel = str(f.relative_to(source_dir).parent)
-        except ValueError:
-            rel = ""
+        rel = ""
+        for sd in source_dirs:
+            try:
+                rel = str(f.relative_to(sd).parent)
+                rel = f"{sd}|{rel}"
+                break
+            except ValueError:
+                pass
         folder_files[rel].append(f)
 
     for folder in folder_files:
@@ -192,7 +204,18 @@ def find_ad_images(
         folder_tail_files[folder] = tail
 
         try:
-            folder_mtime[folder] = (Path(source_dir) / folder).stat().st_mtime
+            folder_mtime[folder] = 0.0
+            if "|" in folder:
+                sd_str, rel_path = folder.split("|", 1)
+                fp = Path(sd_str) / rel_path
+                if fp.exists():
+                    folder_mtime[folder] = fp.stat().st_mtime
+            else:
+                for sd in source_dirs:
+                    fp = Path(sd) / folder
+                    if fp.exists():
+                        folder_mtime[folder] = fp.stat().st_mtime
+                        break
         except OSError:
             folder_mtime[folder] = 0.0
 
@@ -264,7 +287,7 @@ def find_ad_images(
 
 def move_duplicates(
     duplicates: dict,
-    source_dir: Path,
+    source_dirs: list[Path],
     dedup_dir: Path,
     manifest_path: Path,
     logger: logging.Logger = None,
@@ -294,10 +317,14 @@ def move_duplicates(
                 break
 
             entry_id += 1
-            try:
-                rel_path = dup_file.relative_to(source_dir)
-            except ValueError:
-                rel_path = Path(dup_file.name)
+            rel_path = Path(dup_file.name)
+            for sd in source_dirs:
+                try:
+                    rel_path = dup_file.relative_to(sd)
+
+                    break
+                except ValueError:
+                    pass
 
             dest = dedup_dir / rel_path
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -352,7 +379,7 @@ def move_duplicates(
 
     manifest = {
         "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "source_dir": str(source_dir),
+        "source_dirs": [str(d) for d in source_dirs],
         "dedup_dir": str(dedup_dir),
         "total_groups": len(duplicates),
         "total_duplicates": total_dup,
@@ -381,7 +408,7 @@ def move_duplicates(
 
 
 def scan_duplicates(
-    source_dir: Path,
+    source_dirs: list[Path],
     dedup_dir: Path,
     manifest_dir: Path,
     threads: int = 12,
@@ -390,14 +417,14 @@ def scan_duplicates(
 ):
     reset_interrupt()
 
-    duplicates = find_duplicates(source_dir, threads, logger)
+    duplicates = find_duplicates(source_dirs, threads, logger)
     if not duplicates or is_interrupted():
         return None
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     manifest_path = manifest_dir / f"dedup_{timestamp}.json"
 
-    result = move_duplicates(duplicates, source_dir, dedup_dir, manifest_path, logger, db)
+    result = move_duplicates(duplicates, source_dirs, dedup_dir, manifest_path, logger, db)
     return result
 
 
@@ -537,7 +564,7 @@ def move_to_trash(
 
 
 def find_folder_overlaps(
-    source_dir: Path,
+    source_dirs: list[Path],
     duplicates: dict = None,
     overlap_threshold: float = 0.5,
     logger: logging.Logger = None,
@@ -552,35 +579,55 @@ def find_folder_overlaps(
     Returns: {folder_to_delete: (kept_folder, overlap_pct)}
     """
     if duplicates is None:
-        duplicates = find_duplicates(source_dir, logger=logger)
+        duplicates = find_duplicates(source_dirs, logger=logger)
 
     if not duplicates:
         return {}
 
     folder_total: dict[str, int] = defaultdict(int)
-    for root, _dirs, filenames in os.walk(source_dir):
-        for fn in filenames:
-            fp = Path(root) / fn
-            if is_image_file(fp):
-                try:
-                    rel = str(fp.relative_to(source_dir).parent)
-                except ValueError:
+    for sd in source_dirs:
+        for root, _dirs, filenames in os.walk(sd):
+            for fn in filenames:
+                fp = Path(root) / fn
+                if is_image_file(fp):
                     rel = ""
-                folder_total[rel] += 1
+                    for d in source_dirs:
+                        try:
+                            rel = str(fp.relative_to(d).parent)
+                            rel = f"{d}|{rel}"
+                            break
+                        except ValueError:
+                            pass
+                    folder_total[rel] += 1
 
     folder_hashes: dict[str, set[str]] = defaultdict(set)
     for h, files in duplicates.items():
         for f in files:
-            try:
-                rel = str(f.relative_to(source_dir).parent)
-            except ValueError:
-                rel = ""
+            rel = ""
+            for sd in source_dirs:
+                try:
+                    rel = str(f.relative_to(sd).parent)
+                    rel = f"{sd}|{rel}"
+                    break
+                except ValueError:
+                    pass
             folder_hashes[rel].add(h)
 
     folder_mtime: dict[str, float] = {}
     for folder in folder_total:
         try:
-            folder_mtime[folder] = (Path(source_dir) / folder).stat().st_mtime
+            folder_mtime[folder] = 0.0
+            if "|" in folder:
+                sd_str, rel_path = folder.split("|", 1)
+                fp = Path(sd_str) / rel_path
+                if fp.exists():
+                    folder_mtime[folder] = fp.stat().st_mtime
+            else:
+                for sd in source_dirs:
+                    fp = Path(sd) / folder
+                    if fp.exists():
+                        folder_mtime[folder] = fp.stat().st_mtime
+                        break
         except OSError:
             folder_mtime[folder] = 0.0
 
@@ -648,11 +695,27 @@ def move_folder_to_dedup(
     folder_rel: str,
     kept_folder: str,
     overlap_pct: int,
-    source_dir: Path,
+    source_dirs: list[Path],
     folder_dedup_dir: Path,
     logger: logging.Logger = None,
 ) -> tuple[bool, str]:
-    src = source_dir / folder_rel
+    if "|" in folder_rel:
+        sd_str, real_folder_rel = folder_rel.split("|", 1)
+        src = Path(sd_str) / real_folder_rel
+    else:
+        # Fallback if old logic applies
+        src = None
+        for sd in source_dirs:
+            test_src = sd / folder_rel
+            if test_src.exists():
+                src = test_src
+                break
+        real_folder_rel = folder_rel
+
+    if not src or not src.exists():
+        return False, "Source folder does not exist"
+
+    folder_rel = real_folder_rel # update for rest of function
     if not src.exists():
         return False, "Source folder does not exist"
 
@@ -676,20 +739,20 @@ def move_folder_to_dedup(
 
 
 def scan_folder_duplicates(
-    source_dir: Path,
+    source_dirs: list[Path],
     folder_dedup_dir: Path,
     overlap_threshold: float = 0.5,
     logger: logging.Logger = None,
 ):
     reset_interrupt()
 
-    duplicates = find_duplicates(source_dir, logger=logger)
+    duplicates = find_duplicates(source_dirs, logger=logger)
     if not duplicates or is_interrupted():
         if logger:
             logger.info("No duplicates found, cannot analyze folder overlaps")
         return {"folders_moved": 0, "failed": 0}
 
-    overlaps = find_folder_overlaps(source_dir, duplicates, overlap_threshold, logger)
+    overlaps = find_folder_overlaps(source_dirs, duplicates, overlap_threshold, logger)
 
     if not overlaps:
         if logger:
@@ -707,7 +770,7 @@ def scan_folder_duplicates(
         if is_interrupted():
             break
         ok, _ = move_folder_to_dedup(
-            folder_rel, kept, pct, source_dir, folder_dedup_dir, logger
+            folder_rel, kept, pct, source_dirs, folder_dedup_dir, logger
         )
         if ok:
             moved += 1
@@ -726,10 +789,14 @@ def move_ad_images_to_dedup(
     kept_folder: str,
     overlap_pct: int,
     tail_files: list[Path],
-    source_dir: Path,
+    source_dirs: list[Path],
     folder_dedup_dir: Path,
     logger: logging.Logger = None,
 ) -> tuple[int, int]:
+    if "|" in folder_rel:
+        folder_rel = folder_rel.split("|", 1)[1]
+    if "|" in kept_folder:
+        kept_folder = kept_folder.split("|", 1)[1]
     moved = 0
     failed = 0
     dest_folder = folder_dedup_dir / folder_rel
@@ -738,7 +805,13 @@ def move_ad_images_to_dedup(
         if not src.exists():
             continue
         try:
-            rel = src.relative_to(source_dir)
+            rel = Path(src.name)
+            for sd in source_dirs:
+                try:
+                    rel = src.relative_to(sd)
+                    break
+                except ValueError:
+                    pass
             dest = folder_dedup_dir / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             if dest.exists():
@@ -751,12 +824,13 @@ def move_ad_images_to_dedup(
                 logger.error("Ad image move failed: %s -> %s", src, e)
 
     if logger and moved > 0:
-        logger.info("Ad images moved from %s (%d%% overlap with %s): %d files", folder_rel, overlap_pct, kept_folder, moved)
+        kept_clean = kept_folder.split("|", 1)[1] if "|" in kept_folder else kept_folder
+        logger.info("Ad images moved from %s (%d%% overlap with %s): %d files", folder_rel, overlap_pct, kept_clean, moved)
 
     return moved, failed
 
 def scan_ad_duplicates(
-    source_dir: Path,
+    source_dirs: list[Path],
     folder_dedup_dir: Path,
     overlap_threshold: float = 0.5,
     ad_scan_count: int = 6,
@@ -770,7 +844,7 @@ def scan_ad_duplicates(
     """
     reset_interrupt()
 
-    to_delete = find_ad_images(source_dir, overlap_threshold, ad_scan_count, threads, logger)
+    to_delete = find_ad_images(source_dirs, overlap_threshold, ad_scan_count, threads, logger)
     if not to_delete or is_interrupted():
         if logger:
             logger.info("No ad-image folders found")
@@ -784,7 +858,7 @@ def scan_ad_duplicates(
         if is_interrupted():
             break
         m, f = move_ad_images_to_dedup(
-            folder_rel, kept, pct, tail_files, source_dir, folder_dedup_dir, logger
+            folder_rel, kept, pct, tail_files, source_dirs, folder_dedup_dir, logger
         )
         moved += m
         failed += f

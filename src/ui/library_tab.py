@@ -70,7 +70,7 @@ class LibraryTab:
 
     def _gather_values(self):
         return {
-            "source_dir": self.source_var.get(),
+            "source_dirs": getattr(self, "source_dirs", []),
             "scan_corrupt": self.scan_corrupt_var.get(),
             "scan_dedup": self.scan_dedup_var.get(),
             "folder_dedup": self.folder_dedup_var.get(),
@@ -83,7 +83,9 @@ class LibraryTab:
         }
 
     def _restore_values(self, vals):
-        self.source_var.set(vals.get("source_dir", ""))
+        self.source_dirs = vals.get("source_dirs", [])
+        if not self.source_dirs and "source_dir" in vals and vals["source_dir"]:
+            self.source_dirs = [vals["source_dir"]]
         self.scan_corrupt_var.set(vals.get("scan_corrupt", True))
         self.scan_dedup_var.set(vals.get("scan_dedup", False))
         self.folder_dedup_var.set(vals.get("folder_dedup", False))
@@ -116,13 +118,18 @@ class LibraryTab:
         f1.grid(row=0, column=0, sticky="ew", pady=(0, S.SM))
         ctk.CTkLabel(f1, text=t("lib.source_dir"),
                      font=self.app.fonts.heading).pack(anchor="w", padx=S.LG, pady=(S.MD, S.XS))
-        src_row = ctk.CTkFrame(f1, fg_color="transparent")
-        src_row.pack(fill="x", padx=S.LG, pady=(0, S.XS))
-        self.source_var = ctk.StringVar(value="")
-        ctk.CTkEntry(src_row, textvariable=self.source_var,
-                     corner_radius=R.SM).pack(
-            side="left", fill="x", expand=True, padx=(0, S.XS))
-        apple_pill_button(src_row, t("settings.browse"), self._browse_source, width=70).pack(side="left")
+
+        self.lib_list = ctk.CTkScrollableFrame(f1, corner_radius=R.SM, height=100)
+        self.lib_list.pack(fill="x", padx=S.LG, pady=(0, S.XS))
+
+        lib_btns = ctk.CTkFrame(f1, fg_color="transparent")
+        lib_btns.pack(fill="x", padx=S.LG, pady=(0, S.MD))
+        apple_pill_button(lib_btns, t("settings.add_path"), self._add_source_path, width=100).pack(side="left", padx=(0, S.XS))
+        self._lib_count_label = ctk.CTkLabel(lib_btns, text="", font=self.app.fonts.caption, text_color=C.INK_MUTED_48)
+        self._lib_count_label.pack(side="right")
+
+        self.source_dirs = []
+        self._refresh_source_listbox()
 
         opt_frame = ctk.CTkFrame(f1, fg_color="transparent")
         opt_frame.pack(fill="x", padx=S.LG, pady=(S.XS, S.XS))
@@ -369,10 +376,33 @@ class LibraryTab:
         self.log_text.delete("1.0", "end")
         self.log_text.configure(state="disabled")
 
-    def _browse_source(self):
+
+
+    def _refresh_source_listbox(self):
+        if not hasattr(self, "lib_list"):
+            return
+        for w in self.lib_list.winfo_children():
+            w.destroy()
+        self._lib_widgets = []
+        for path in self.source_dirs:
+            row = ctk.CTkFrame(self.lib_list, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            ctk.CTkLabel(row, text=path, font=self.app.fonts.body).pack(side="left")
+            apple_ghost_button(row, "✕", lambda p=path: self._remove_source_path(p),
+                               width=28).pack(side="right")
+            self._lib_widgets.append(row)
+        self._lib_count_label.configure(text=str(len(self.source_dirs)))
+
+    def _remove_source_path(self, path):
+        if path in self.source_dirs:
+            self.source_dirs.remove(path)
+        self._refresh_source_listbox()
+
+    def _add_source_path(self):
         d = filedialog.askdirectory(title=t("lib.source_dir"))
-        if d:
-            self.source_var.set(d)
+        if d and d not in self.source_dirs:
+            self.source_dirs.append(d)
+            self._refresh_source_listbox()
 
     def _browse_manifest(self):
         path = filedialog.askopenfilename(
@@ -435,8 +465,15 @@ class LibraryTab:
         self.restore_progress_var.set(0)
 
     def _start_scan(self):
-        source = self.source_var.get().strip()
-        if not source or not Path(source).exists():
+        cfg = load_config()
+        sources = self.source_dirs
+
+        valid_sources = []
+        for s in sources:
+            if s and Path(s).exists():
+                valid_sources.append(Path(s))
+
+        if not valid_sources:
             messagebox.showerror("", t("lib.select_source"))
             return
         convert_webp = self.convert_webp_var.get()
@@ -472,7 +509,7 @@ class LibraryTab:
         qh.setFormatter(fmt)
         logger.addHandler(qh)
 
-        source_dir = Path(source)
+        source_dirs = valid_sources
         threads = cfg.get("scan_threads", 12)
         white_bg = self.white_bg_var.get()
         do_scan = self.scan_corrupt_var.get()
@@ -494,7 +531,7 @@ class LibraryTab:
                     error_dir = Path(cfg.get("error_dir", str(Path.cwd() / "Error")))
                     error_dir.mkdir(parents=True, exist_ok=True)
                     result = scan_directory(
-                        source_dir, error_dir, log_path,
+                        source_dirs, error_dir, log_path,
                         threads=threads, convert_webp=convert_webp,
                         white_bg=white_bg, progress_callback=progress_cb,
                         db=db, db_skip=db_skip)
@@ -509,19 +546,19 @@ class LibraryTab:
                         dedup_dir.mkdir(parents=True, exist_ok=True)
                         manifest_dir = Path(DATA_DIR) / "duplicate_manifest"
                         manifest_dir.mkdir(parents=True, exist_ok=True)
-                        dr = scan_duplicates(source_dir, dedup_dir, manifest_dir, threads, logger, db)
+                        dr = scan_duplicates(source_dirs, dedup_dir, manifest_dir, threads, logger, db)
                         self.result_queue.put(("dedup", dr))
 
                     if do_folder_dedup and not is_interrupted():
-                        folder_dedup_dir = Path(str(source_dir) + "_Duplicate_Folders")
-                        fr = scan_folder_duplicates(source_dir, folder_dedup_dir, overlap_threshold, logger)
+                        folder_dedup_dir = Path(str(source_dirs[0]) + "_Duplicate_Folders")
+                        fr = scan_folder_duplicates(source_dirs, folder_dedup_dir, overlap_threshold, logger)
                         self.result_queue.put(("folder_dedup", fr))
 
                     if do_ad_scan and not is_interrupted():
                         reset_interrupt()
                         from ..imgchk.dedup import scan_ad_duplicates
-                        ad_dedup_dir = Path(str(source_dir) + "_Ad_Folders")
-                        ar = scan_ad_duplicates(source_dir, ad_dedup_dir, overlap_threshold, ad_scan_count, threads, logger)
+                        ad_dedup_dir = Path(str(source_dirs[0]) + "_Ad_Folders")
+                        ar = scan_ad_duplicates(source_dirs, ad_dedup_dir, overlap_threshold, ad_scan_count, threads, logger)
                         self.result_queue.put(("ad_scan", ar))
             except Exception as e:
                 self.result_queue.put(("error", str(e)))
