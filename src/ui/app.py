@@ -14,7 +14,7 @@ from ..utils.integrity import verify_zip_integrity, extract_zip
 from ..utils.metadata_scraper import scrape_gallery_metadata
 from ..db.metadata import save_gallery_metadata
 
-from .widgets import setup_fonts, Fonts, C, S, R, apple_section, apple_pill_button, apply_theme, get_theme_name, CTK_PARCHMENT
+from .widgets import setup_fonts, Fonts, C, S, R, apple_pill_button, apply_theme, get_theme_name, CTK_PARCHMENT
 from .task_tab import TaskTab
 from .settings_tab import SettingsTab
 from .library_tab import LibraryTab
