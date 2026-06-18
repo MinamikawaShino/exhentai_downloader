@@ -82,7 +82,7 @@ def _make_cache_entry(filepath: Path, action: str, engine: str = ""):
 
 
 def scan_directory(
-    source_dir: Path,
+    source_dirs: list[Path],
     error_dir: Path,
     log_path: Path,
     threads: int = 12,
@@ -92,7 +92,7 @@ def scan_directory(
     db=None,
     db_skip: bool = False,
 ):
-    logger = logging.getLogger(f"img_scanner_{id(source_dir)}")
+    logger = logging.getLogger(f"img_scanner_{id(source_dirs[0]) if source_dirs else 0}")
     if not logger.handlers:
         logger.setLevel(logging.INFO)
         formatter = logging.Formatter(
@@ -104,7 +104,7 @@ def scan_directory(
         logger.addHandler(fh)
 
     logger.info("=" * 60)
-    logger.info("Scan directory: %s (threads: %d)", source_dir, threads)
+    logger.info("Scan directories: %s (threads: %d)", [str(d) for d in source_dirs], threads)
     logger.info("Corrupted files will be moved to: %s", error_dir)
     if convert_webp:
         logger.info("WebP to PNG: enabled (white_bg: %s)", "yes" if white_bg else "no")
@@ -112,14 +112,18 @@ def scan_directory(
         logger.info("DB cache: enabled")
     logger.info("=" * 60)
 
-    all_files = collect_image_files(source_dir)
+    all_files = []
+    for sd in source_dirs:
+        all_files.extend(collect_image_files(sd))
     total_discovered = len(all_files)
     webp_count = sum(1 for f in all_files if is_webp_file(f))
 
     cache_map = {}
     cached_skipped = 0
     if db and not db_skip:
-        cache_map = db.load_cache_map(str(source_dir))
+        cache_map = {}
+        for sd in source_dirs:
+            cache_map.update(db.load_cache_map(str(sd)))
         files_to_scan = []
         for f in all_files:
             fp = str(f)
@@ -205,10 +209,13 @@ def scan_directory(
         for filepath, reason in corrupt_files:
             if is_interrupted():
                 break
-            try:
-                rel = filepath.relative_to(source_dir)
-            except ValueError:
-                rel = filepath.name
+            rel = filepath.name
+            for sd in source_dirs:
+                try:
+                    rel = filepath.relative_to(sd)
+                    break
+                except ValueError:
+                    pass
             dest = error_dir / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             try:

@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
     os.utime(folder_a, (200, 200))
     os.utime(folder_b, (100, 100))
 
-    overlaps = find_folder_overlaps(src, logger=logger)
+    overlaps = find_folder_overlaps([src], logger=logger)
     print("case 1 overlap (should delete A, 50% overlap, different counts):", overlaps)
 
     # case 2: count A = 18, count B = 20. similar count -> delete earliest
@@ -40,5 +40,5 @@ with tempfile.TemporaryDirectory() as tmpdir:
     os.utime(folder_a, (200, 200))
     os.utime(folder_b, (100, 100))
 
-    overlaps = find_folder_overlaps(src, logger=logger)
+    overlaps = find_folder_overlaps([src], logger=logger)
     print("case 2 overlap (should delete B, earliest, similar counts):", overlaps)

@@ -43,7 +43,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
             print(f"  {Path(root).name}/{f}")
 
     # Run scan_ad_duplicates
-    res = scan_ad_duplicates(src, dedup, overlap_threshold=0.5, ad_scan_count=6, threads=1, logger=logger)
+    res = scan_ad_duplicates([src], dedup, overlap_threshold=0.5, ad_scan_count=6, threads=1, logger=logger)
     print("Result:", res)
 
     print("Files in dedup after ad scan:")
