@@ -92,8 +92,8 @@ class R:
 
 SYSTEM_FONTS = [
     "SF Pro Display", "SF Pro Text",
-    "Microsoft YaHei UI", "Microsoft YaHei",
-    "Microsoft JhengHei UI", "Microsoft JhengHei",
+    "Microsoft YaHei", "Microsoft YaHei UI",
+    "Microsoft JhengHei", "Microsoft JhengHei UI",
     "Noto Sans CJK SC", "Segoe UI",
 ]
 MONO_FONTS = ["SF Mono", "Cascadia Code", "Consolas", "Cascadia Mono", "Courier New"]
