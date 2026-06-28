@@ -28,6 +28,7 @@ DEFAULT_CONFIG = {
     "scan_corrupt_after_extract": False,
     "dedup_overlap_threshold": 50,
     "skip_page_threshold": 5,
+    "webp_to_png_after_extract": False,
 }
 
 
